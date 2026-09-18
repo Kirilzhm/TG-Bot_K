@@ -74,7 +74,8 @@ const userHelpers = {
     },
     setState: (telegram_id, state) => {
         db.prepare('UPDATE users SET state = ? WHERE telegram_id = ?').run(state, telegram_id);
-    }
+    },
+    getAllUsersId: () => db.prepare('SELECT telegram_id FROM users').pluck().all()
 };
 
 // --- Хелпер Категорії ---

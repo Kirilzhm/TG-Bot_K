@@ -5,7 +5,6 @@ import express from 'express';
 import { Telegraf, Markup, session, Scenes } from 'telegraf';
 import { message } from 'telegraf/filters';
 
-import showCategoriesMenu from './showHandlers/showCategoriesMenu.js';
 import showProductCard from './showHandlers/showProductCard.js';
 import generateSignature from './Helpers/generateSignature.js';
 
@@ -17,6 +16,7 @@ import {
 } from './database.js';
 import { button } from 'telegraf/markup';
 import { error, log } from 'console';
+import { resolve } from 'dns';
 
 const ADMIN_IDS = process.env.ADMIN_ID
     ? process.env.ADMIN_ID.split(',').map(id => id.trim())
@@ -41,11 +41,6 @@ const addProductWizard = new Scenes.WizardScene(
         await ctx.answerCbQuery().catch(() => {});
         if (ctx.callbackQuery?.data === 'cancel_wizard') {
             await ctx.scene.leave();
-            const adminKeyboard = Markup.inlineKeyboard([
-                [Markup.button.callback('➕ Додати підручник', 'admin_add_product')],
-                [Markup.button.callback('📊 Видалити підручник', 'admin_delete_product')],
-                [Markup.button.callback('📊 Змінити інфу підручника', 'admin_change_product')],
-            ]);
             return ctx.reply('Додавання товару скасовано.\nЯкі дії?', adminKeyboard);
         }
 
@@ -72,14 +67,14 @@ const addProductWizard = new Scenes.WizardScene(
         }
     },
 
-    // ---Крок 2 - Обробка віку---
+    // ---Крок 2 - Обробка віку-----
     async (ctx) => {
         if (ctx.callbackQuery?.data === 'back_to_0') {
             ctx.wizard.selectStep(0);
             const keyboard = Markup.inlineKeyboard([
                 [Markup.button.callback('Автентика', 'type_avtentyka')],
                 [Markup.button.callback('Розробка підручника', 'type_rozrobka')],
-                [Markup.button.callback('🛑 Скасувати (вийти)', 'cancel_wizard')]
+                [Markup.button.callback('Скасувати (вийти)', 'cancel_wizard')]
             ]);
             await ctx.editMessageText('Обери тип товару:👇', keyboard);
             return;
@@ -97,7 +92,7 @@ const addProductWizard = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
 
-    // ---Корк 3 - Коротка назва
+    // ---Корк 3 - Коротка назва-----
     async (ctx) => {
         if (ctx.callbackQuery?.data === 'back_to_0' || ctx.callbackQuery?.data === 'back_to_1') {
             if (ctx.wizard.state.type === 'avtentyka') {
@@ -130,7 +125,7 @@ const addProductWizard = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
 
-    // ---Крок 4 - Повна назва---
+    // ---Крок 4 - Повна назва-----
     async (ctx) => {
         if (ctx.callbackQuery?.data === 'back_to_2') {
             ctx.wizard.selectStep(2);
@@ -147,7 +142,7 @@ const addProductWizard = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
 
-    // ---Крок 5 - Рівень складності---
+    // ---Крок 5 - Рівень складності-----
     async (ctx) => {
         if (ctx.callbackQuery?.data === 'back_to_3') {
             ctx.wizard.selectStep(3);
@@ -164,7 +159,7 @@ const addProductWizard = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
 
-    // ---Крок 6 - Опис---
+    // ---Крок 6 - Опис-----
     async (ctx) => {
         if (ctx.callbackQuery?.data === 'back_to_4') {
             ctx.wizard.selectStep(4);
@@ -181,7 +176,7 @@ const addProductWizard = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
 
-    // ---Крок 7 - Фотографії---
+    // ---Крок 7 - Фотографії-----
     async(ctx) => {
         if (!ctx.wizard.state.photos) ctx.wizard.state.photos = [];
 
@@ -216,7 +211,7 @@ const addProductWizard = new Scenes.WizardScene(
         }
     },
 
-    // ---Крок 8 - Демо-посилання---
+    // ---Крок 8 - Демо-посилання-----
     async (ctx) => {
         if (ctx.callbackQuery?.data === 'back_to_6') {
             ctx.wizard.state.photo = [];
@@ -240,7 +235,7 @@ const addProductWizard = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
 
-    // ---Крок 9 - Ціна---
+    // ---Крок 9 - Ціна-----
     async (ctx) => {
         if (ctx.callbackQuery?.data === 'back_to_7') {
             ctx.wizard.selectStep(7);
@@ -262,7 +257,7 @@ const addProductWizard = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
 
-    // ---Крок 10 - Фінал---
+    // ---Крок 10 - Фінал-----
     async (ctx) => {
         if (ctx.callbackQuery?.data === 'back_to_8') {
             ctx.wizard.selectStep(8);
@@ -423,6 +418,9 @@ const askQuestionWizzard = new Scenes.WizardScene(
         return ctx.wizard.next();
     },
     async (ctx) => {
+        if (ctx.callbackQuery) {
+        await ctx.answerCbQuery().catch(() => {});
+        }
         if (ctx.callbackQuery?.data === 'cancel_question') {
             await ctx.answerCbQuery().catch(() => {});
             const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ В меню', 'first_btn')]]);
@@ -439,11 +437,11 @@ const askQuestionWizzard = new Scenes.WizardScene(
             `📩 **Нове запитання від користувача!**\n\n` +
             `👤 **Ім'я:** ${user.first_name} ${user.last_name || ''}\n` +
                `🏷 **Юзернейм:** ${user.username ? '@' + user.username : 'немає'}\n` +
-               `🆔 **ID:** \`${user.id}\`\n\n` +
             `💬 **Повідомлення:**\n${userMsg}`;
 
+        const safeUsername = user.username ? user.username : 'none';
         const kb = Markup.inlineKeyboard([
-            [Markup.button.callback('💬 Відповісти', `reply_user_${user.id}`)]
+            [Markup.button.callback('💬 Відповісти', `reply_user_${user.id}_${safeUsername}`)]
         ]);
 
         for (const adminId of ADMIN_IDS) {
@@ -465,9 +463,10 @@ const replyToUserWizzard = new Scenes.WizardScene(
 
     async (ctx) => {
         ctx.wizard.state.targetUserId = ctx.scene.state.targetUserId;
-        const {targetUserdId} = ctx.scene.state;
+        const {targetUserdId, targetUsername} = ctx.scene.state;
+        const usernameText = (targetUsername && targetUsername !== 'none') ? `@${targetUsername}` : 'немає';
         const kb = Markup.inlineKeyboard([[Markup.button.callback('🛑 Скасувати', 'cancel_reply')]]);
-        await ctx.reply(`✍️ Введи текст відповіді для користувача (ID: ${targetUserdId}):`, kb);
+        await ctx.reply(`✍️ Введи текст відповіді для користувача (Юзернейм: ${usernameText}):`, kb);
         return ctx.wizard.next();
     },
     async (ctx) => {
@@ -498,7 +497,101 @@ const replyToUserWizzard = new Scenes.WizardScene(
     }
 )
 
-const stage = new Scenes.Stage([addProductWizard, editProductWizard, askQuestionWizzard, replyToUserWizzard]);
+const messageToEveryone = new Scenes.WizardScene(
+    'MESSAGE_TO_EVERYONE',
+    // ----- Крок 1 -----
+    async (ctx) => {
+        const kb = Markup.inlineKeyboard([[Markup.button.callback('Скасувати (вийти)', 'cancel_wizard')]])
+        await ctx.reply('Надішли все, що хочеш розіслати всім', kb)
+        return ctx.wizard.next();
+    },
+    // ----- Крок 2 -----
+    async (ctx) => {
+        const confirmKeyboard = Markup.inlineKeyboard([
+            [Markup.button.callback('✅ Так, розіслати', 'send_to_everyone')],
+            [Markup.button.callback('❌ Скасувати', 'cancel_wizard')]
+        ])
+        if (ctx.callbackQuery?.data === 'cancel_wizard') {
+            await ctx.answerCbQuery().catch(() => {});
+            await ctx.scene.leave();
+            return ctx.reply('Розсилку скасовано.\nЯкі дії?', adminKeyboard);
+        }
+       if (!ctx.message?.media_group_id) {
+            ctx.wizard.state.broadcastData = {
+                type: 'single',
+                messageId: ctx.message.message_id
+            };
+
+            await ctx.telegram.copyMessage(ctx.chat.id, ctx.chat.id, ctx.message.message_id);
+            await ctx.reply('Ось так це виглядатиме. Розсилати?', confirmKeyboard);
+            
+            return ctx.wizard.next();
+        }
+
+        if (!ctx.wizard.state.mediaGroupIds) ctx.wizard.state.mediaGroupIds = [];
+
+        ctx.wizard.state.mediaGroupIds.push(ctx.message.message_id);
+
+        if (ctx.wizard.state.timer) {
+            clearTimeout(ctx.wizard.state.timer);
+        }
+
+        ctx.wizard.state.timer = setTimeout(async () => {
+            ctx.wizard.state.broadcastData = {
+            type: 'album',
+            messageIds: ctx.wizard.state.mediaGroupIds
+        };
+        await ctx.telegram.callApi('copyMessages', {
+            chat_id: ctx.chat.id,
+            from_chat_id: ctx.chat.id,
+            message_ids: ctx.wizard.state.mediaGroupIds
+        });
+
+        await ctx.reply('Ось так виглядатиме альбом. Розсилати?', confirmKeyboard);
+
+        return ctx.wizard.next();
+        }, 500);
+    },
+    // ----- Крок 3 -----
+    async (ctx) => {
+        if (ctx.callbackQuery) {
+            await ctx.answerCbQuery().catch(() => {});
+        }
+        if (ctx.callbackQuery?.data === 'cancel_wizard') {
+            await ctx.scene.leave();
+            return ctx.reply('Розсилку скасовано.\nЯкі дії?', adminKeyboard);
+        }
+        if (ctx.callbackQuery?.data === 'send_to_everyone') {
+            await ctx.reply('Розсилка почалася. Зачекай...');
+            const allUsers = users.getAllUsersId();
+            let successCount = 0;
+            const data = ctx.wizard.state.broadcastData;
+
+            for (const user of allUsers) {
+                const tgId = user;
+                try {
+                    if (data.type === 'single'){
+                        await ctx.telegram.copyMessage(tgId, ctx.chat.id, data.messageId);
+                    } else if (data.type === 'album') {
+                        await ctx.telegram.callApi('copyMessages', {
+                            chat_id: tgId,
+                            from_chat_id: ctx.chat.id,
+                            message_ids: data.messageIds
+                        });
+                    }
+                    successCount++;
+                    await new Promise((resolve) => setTimeout(resolve, 35));
+                } catch (err) {
+                    console.log(`Не вдалося відправити юзеру ${tgId}: ${err.message}`);
+                }
+            }
+            await ctx.reply(`📢 Розсилку завершено! Доставлено: ${successCount} з ${allUsers.length} користувачів.`);
+            return ctx.scene.leave();
+        }
+    }
+)
+
+const stage = new Scenes.Stage([addProductWizard, editProductWizard, askQuestionWizzard, replyToUserWizzard, messageToEveryone]);
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const WFP_MERCHANT_ACCOUNT = process.env.WFP_MERCHANT_ACCOUNT;
@@ -515,6 +608,20 @@ bot.use((ctx, next) => {
     return next(); 
 });
 
+const firstMessageText = `Привіт! Я бот-помічник \nhttps://t.me/engmiroboards\nТут ти можеш переглянути, придбати розробки і задавати питання💗\n\nНатисни на «Наявність» і я допоможу тобі обрати розробку за твоїм запитом👇`;
+
+const firstBtnKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('Наявність', 'first_btn')],
+    [Markup.button.callback('Задати питання', 'ask_question')],
+    [Markup.button.url('Безкоштовна дошка', 'https://miro.com/app/board/uXjVIttCETE=/?share_link_id=507760614789')]
+]);
+
+const adminKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('➕ Додати підручник', 'admin_add_product')],
+        [Markup.button.callback('✏️ Змінити інфу підручника', 'admin_change_product')],
+        [Markup.button.callback('🗑️ Видалити підручник', 'admin_delete_product')],
+        [Markup.button.callback('📢 Розсилка всім', 'admin_message_to_everyone')]
+    ]);
 
 // -----ОБРОБКА /start-----
 bot.start((ctx) => {
@@ -531,15 +638,6 @@ bot.start((ctx) => {
         }
     }
     
-    const firstMessageText = `Привіт! Я бот-помічник 
-https://t.me/engmiroboards
-Тут ти можеш переглянути, придбати розробки і задавати  питання💗
-
-Натисни на «Наявність» і я допоможу тобі обрати розробку за твоїм запитом👇`;
-    const firstBtnKeyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('Наявність', 'first_btn')],
-        [Markup.button.callback('Задати питання', 'ask_question')]
-    ]);
     return ctx.reply(firstMessageText, firstBtnKeyboard);
 });
 
@@ -563,14 +661,14 @@ bot.command('admin', (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) {
         return ctx.reply('Йой, сюди не можна! 🛑');
     }
-    const adminKeyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('➕ Додати підручник', 'admin_add_product')],
-        [Markup.button.callback('📊 Видалити підручник', 'admin_delete_product')],
-        [Markup.button.callback('📊 Змінити інфу підручника', 'admin_change_product')],
-    ]);
 
     return ctx.reply('Які дії?', adminKeyboard);
 });
+
+bot.action('admin_message_to_everyone', (ctx) => {
+    ctx.answerCbQuery();
+    return ctx.scene.enter('MESSAGE_TO_EVERYONE');
+})
 
 bot.action('admin_add_product', (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) {
@@ -579,11 +677,12 @@ bot.action('admin_add_product', (ctx) => {
     return ctx.scene.enter('ADD_PRODUCT_SCENE');
 });
 
-bot.action(/^reply_user_(\d+)$/, async (ctx) => {
+bot.action(/^reply_user_(\d+)_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
     const targetUserId = ctx.match[1];
+    const targetUsername = ctx.match[2];
     
-    return ctx.scene.enter('REPLY_TO_USER_SCENE', { targetUserId });
+    return ctx.scene.enter('REPLY_TO_USER_SCENE', { targetUserId, targetUsername });
 });
 
 
@@ -665,24 +764,14 @@ bot.action(/^prod_delete_(\d+)$/, async (ctx) => {
 });
 
 bot.action('back_to_adminMenu', (ctx) => {
-    const adminKeyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('➕ Додати підручник', 'admin_add_product')],
-        [Markup.button.callback('📊 Видалити підручник', 'admin_delete_product')],
-        [Markup.button.callback('📊 Змінити інфу підручника', 'admin_change_product')],
-    ]);
 
     return ctx.editMessageText('Які дії?', adminKeyboard);
 })
 
 bot.action('back_to_admin_Menu', async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
-    const adminKeyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('➕ Додати підручник', 'admin_add_product')],
-        [Markup.button.callback('📊 Видалити підручник', 'admin_delete_product')],
-        [Markup.button.callback('📊 Змінити інфу підручника', 'admin_change_product')],
-    ]);
 
-    return ctx.reply('Йоу', adminKeyboard);
+    return ctx.reply('Які дії?', adminKeyboard);
 })
 
 // ---Зміна---
@@ -971,6 +1060,14 @@ app.post('/wayforpay-webhook', async (req, res) => {
                         order.user_id,
                         `✅ <b>Оплата успішна!</b>\n\n⬇️ Ваші матеріали:\n${product.download_link}`,
                         { parse_mode: 'HTML' }
+                    );
+
+                    await new Promise(resolve => setTimeout(resolve, 100));
+
+                    await bot.telegram.sendMessage(
+                        order.user_id,
+                        firstMessageText,
+                        firstBtnKeyboard
                     );
                 } catch (e) {
                     console.error(`Не вдалося відправити юзеру ${order.user_id}:`, e);
