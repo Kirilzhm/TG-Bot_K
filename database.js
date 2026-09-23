@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
+import { markAsUncloneable } from 'node:worker_threads';
 
 const dbPath = path.join(import.meta.dirname, 'database.db');
 
@@ -39,7 +40,6 @@ function initDB() {
             age_category INTEGER,
             demo_link TEXT UNIQUE DEFAULT NULL,
             download_link TEXT NOT NULL,
-            deep_link_code TEXT UNIQUE DEFAULT NULL,
             FOREIGN KEY(category_id) REFERENCES categories(id)
         )
     `);
@@ -56,6 +56,26 @@ function initDB() {
             FOREIGN KEY(product_id) REFERENCES products(id)
         )
     `);
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS seasonal_campaigns (
+            product_id INTEGER,
+            campaign_code TEXT PRIMARY KEY,
+            message_text TEXT,
+            photos_first_message_json TEXT DEFAULT NULL,
+            reward_link TEXT NOT NULL
+        )
+    `);
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS seasonal_participants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            campaign_code TEXT,
+            wait_until INTEGER,
+            is_notified INTEGER DEFAULT 0
+        )
+    `)
 
     console.log('Таблиці успішно створені!');
 }
@@ -90,7 +110,6 @@ const productHelpers = {
         return db.prepare('SELECT * FROM products WHERE category_id = ?').all(category_id);
     },
     getById: (id) => db.prepare('SELECT * FROM products WHERE id = ?').get(id),
-    getByDeepLinkCode: (code) => db.prepare('SELECT * FROM products WHERE deep_link_code = ?').get(code),
     getByType: (type) => db.prepare('SELECT id, title, short_title, level, age_category FROM products WHERE type = ?').all(type),
     getByAge: (age_category) => db.prepare('SELECT id, title FROM products WHERE age_category = ?').all(age_category),
     getLevelsByAgeAndType: (ageCategory, type) => db.prepare('SELECT DISTINCT level FROM products WHERE age_category = ? AND type = ?').all(ageCategory, type),
@@ -129,10 +148,41 @@ const orderHelpers = {
     getById: (id) => db.prepare('SELECT * FROM orders WHERE id = ?').get(id)
 };
 
+// --- Хелпер Сезоних посилань --- 
+const seasonalLinksHelpers = {
+    existingCampaign: (enteredCode) => {
+        return db.prepare('SELECT campaign_code FROM seasonal_campaigns WHERE campaign_code = ?').get(enteredCode);
+    },
+    getCampaign: (campaign_code) => {
+        return db.prepare('SELECT * FROM seasonal_campaigns WHERE campaign_code = ?').get(campaign_code);
+    },
+    addParticipant: (user_id, campaign_code, wait_until) => {
+        return db.prepare(`
+            INSERT INTO seasonal_participants
+            (user_id, campaign_code, wait_until)
+            VALUES (?, ?, ?)
+        `).run(user_id, campaign_code, wait_until);
+    },
+    getParticipantsToNotify: (curentTime) => {
+        return db.prepare(`SELECT * FROM seasonal_participants WHERE is_notified = 0 AND wait_until <= ?`).all(curentTime);
+    },
+    add: (campaign_code, text, photos, reward_link) => {
+        return db.prepare(`
+            INSERT INTO seasonal_campaigns
+            (campaign_code, message_text, photos_first_message_json, reward_link)
+            VALUES (?, ?, ?, ?)
+        `).run(campaign_code, text, photos, reward_link);
+    },
+    markAsNotified: (participant_id) => {
+        return db.prepare(`UPDATE seasonal_participants SET is_notified = 1 WHERE id = ?  `).run(participant_id);
+    }
+}
+
 export {
     db,
     userHelpers as users,
     categoryHelpers as categories,
     productHelpers as products,
-    orderHelpers as orders
+    orderHelpers as orders,
+    seasonalLinksHelpers as seasonalLinks
 };

@@ -1,8 +1,9 @@
 import 'dotenv/config';
 import crypto from 'crypto';
 import express from 'express';
+import cron from 'node-cron';
 
-import { Telegraf, Markup, session, Scenes } from 'telegraf';
+import { Telegraf, Markup, session, Scenes, Telegram } from 'telegraf';
 import { message } from 'telegraf/filters';
 
 import showProductCard from './showHandlers/showProductCard.js';
@@ -12,11 +13,13 @@ import {
     users,
     categories,
     products,
-    orders
+    orders, 
+    seasonalLinks
 } from './database.js';
 import { button } from 'telegraf/markup';
 import { error, log } from 'console';
 import { resolve } from 'dns';
+import { underline } from 'telegraf/format';
 
 const ADMIN_IDS = process.env.ADMIN_ID
     ? process.env.ADMIN_ID.split(',').map(id => id.trim())
@@ -243,7 +246,7 @@ const addProductWizard = new Scenes.WizardScene(
                 [Markup.button.callback('⏭ Пропустити', 'skip_demo')],
                 [Markup.button.callback('⬅️ Назад', 'back_to_6')]
             ]);
-            await ctx.editMessageText('Надішліть посилання на ДЕМО (або пропустіть):', kb);
+            await ctx.editMessageText('Надішли посилання на ДЕМО (або пропусти):', kb);
             return ctx.wizard.selectStep(8);
         }
 
@@ -591,7 +594,158 @@ const messageToEveryone = new Scenes.WizardScene(
     }
 )
 
-const stage = new Scenes.Stage([addProductWizard, editProductWizard, askQuestionWizzard, replyToUserWizzard, messageToEveryone]);
+const seasonalLink = new Scenes.WizardScene(
+    'SEASONAL_LINK',
+    // ----- Крок 0 -----
+    async (ctx) => {
+        const kb = Markup.inlineKeyboard([[Markup.button.callback('Скасувати (вийти)', 'cancel_wizard')]])
+        await ctx.reply('Надішли унікальний код акції (наприклад, якщо це буде "autumn2026", то посилання на бота з цим матеріалом буде таке: https://t.me/kateengtutor_bot?start=autumn2026 ', kb);
+        return ctx.wizard.next();
+    },
+    // ----- Крок 1 -----
+    async (ctx) => {
+        if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => {});
+        if (ctx.callbackQuery?.data === 'cancel_wizard') {
+            await ctx.scene.leave();
+            return ctx.reply('Додавання посилання скасовано.\nЯкі дії?', adminKeyboard);
+        }
+
+        const text = ctx.message?.text;
+        if (!text) {
+            await ctx.reply('Надішли код текстом');
+            return;
+        }
+
+       if (seasonalLinks.existingCampaign(text.trim())) {
+            await ctx.reply('Такий код вже є, введи інший');
+            return;
+        }
+
+        ctx.wizard.state.campaign_code = text.trim();
+        const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'back_to_code')]])
+        await ctx.reply('Введи текст початкового повідомлення', kb)
+        return ctx.wizard.next();
+    },
+    // ----- Крок 2 -----
+    async (ctx) => {
+        if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => {});
+        if (ctx.callbackQuery?.data === 'cancel_wizard') {
+            await ctx.scene.leave();
+            return ctx.reply('Додавання посилання скасовано.\nЯкі дії?', adminKeyboard);
+        }
+        if (ctx.callbackQuery?.data === 'back_to_code') {
+            ctx.wizard.selectStep(1);
+            const kb = Markup.inlineKeyboard([[Markup.button.callback('Скасувати (вийти)', 'cancel_wizard')]])
+            await ctx.reply('Надішли унікальний код акції (наприклад, якщо це буде "autumn2026", то посилання на бота з цим матеріалом буде таке: https://t.me/kateengtutor_bot?start=autumn2026 ', kb);
+            return;
+        }
+
+        const text = ctx.message?.text;
+        
+        if (!text) {
+            const kb = Markup.inlineKeyboard([[Markup.button.callback('Скасувати (вийти)', 'cancel_wizard')]])
+            await ctx.reply('Надішли текст', kb);
+            return;
+        }
+
+        ctx.wizard.state.text = text.trim()
+
+        const kb = Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ Назад', 'back_to_text')],
+            [Markup.button.callback('Пропустити', 'skip_photos')]
+        ]);
+        await ctx.reply('Надішли від 1 до 10 фотографій, які будуть в початковому повідомленні або натисни Пропустити', kb);
+        return ctx.wizard.next();
+    },
+    // ----- Крок 3 -----
+    async (ctx) => {
+        if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => {});
+        if (ctx.callbackQuery?.data === 'back_to_text') {
+            ctx.wizard.selectStep(2);
+            const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'back_to_code')]])
+            await ctx.reply('Введи текст початкового повідомлення', kb)
+            return;
+        }
+
+        if (ctx.callbackQuery?.data === 'skip_photos') {
+            await ctx.answerCbQuery().catch(() => {});
+            ctx.wizard.state.photos = [];
+            const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'back_to_photos')]])
+            await ctx.reply('Напиши повідомлення і посилання, яке буде через 3 дні', kb);
+            return ctx.wizard.next();
+        }
+
+        const photoArr = ctx.message?.photo;
+
+        if (!photoArr) {
+            await ctx.reply('Це не схоже на фото. Надішли фото або натисни "Пропустити":');
+            return;
+        }
+
+        const bestPhotoId = photoArr[photoArr.length - 1].file_id;
+
+        if (!ctx.wizard.state.photos) ctx.wizard.state.photos = [];
+
+        if (ctx.message?.media_group_id) {
+            ctx.wizard.state.photos.push(bestPhotoId);
+            
+            if (ctx.wizard.state.timer) {
+                    clearTimeout(ctx.wizard.state.timer);
+            }
+
+            ctx.wizard.state.timer = setTimeout(async () => {
+                const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'back_to_photos')]]);
+                await ctx.reply(`Напиши посилання, яке прийде через 3 дні`, kb);
+
+                ctx.wizard.next(); 
+            }, 500);
+            return;
+        } else {
+            ctx.wizard.state.photos.push(bestPhotoId)
+            const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'back_to_photos')]]);
+            await ctx.reply('Напиши ціле повідомлення з посиланням, яке прийде через 3 дні', kb);
+            
+            return ctx.wizard.next();
+        }
+    },
+    // ----- Крок 4 -----
+    async (ctx) => {
+        if (ctx.callbackQuery) await ctx.answerCbQuery().catch(() => {});
+       if (ctx.callbackQuery?.data === 'back_to_photos') {
+            ctx.wizard.selectStep(3);
+            ctx.wizard.state.photos = [];
+            const kb = Markup.inlineKeyboard([
+                [Markup.button.callback('⬅️ Назад', 'back_to_text')],
+                [Markup.button.callback('Пропустити', 'skip_photos')]
+            ])
+            await ctx.reply('Надішли від 1 до 10 фотографій, які будуть в початковому повідомленні або натисни Пропустити', kb);
+            return;
+        }
+
+        const rewardLink = ctx.message?.text?.trim();
+        if (!rewardLink) {
+            const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'back_to_photos')]]);
+            await ctx.reply('Будь ласка, надішли повідомлення текстом:', kb);
+            return;
+        }
+
+        ctx.wizard.state.reward_link = rewardLink;
+
+        const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ В меню', 'back_to_adminMenu')]])
+        await ctx.reply(`Все готово. Ось твоє посилання:\n\nhttps://t.me/KirilsTest_bot?start=${ctx.wizard.state.campaign_code}`, kb);
+
+        const state = ctx.wizard.state;
+        const photoJson = JSON.stringify(state.photos || []);
+
+        seasonalLinks.add(
+            state.campaign_code, state.text, photoJson, state.reward_link
+        );
+
+        return ctx.scene.leave();
+    }
+)
+
+const stage = new Scenes.Stage([addProductWizard, editProductWizard, askQuestionWizzard, replyToUserWizzard, messageToEveryone, seasonalLink]);
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const WFP_MERCHANT_ACCOUNT = process.env.WFP_MERCHANT_ACCOUNT;
@@ -620,27 +774,64 @@ const adminKeyboard = Markup.inlineKeyboard([
         [Markup.button.callback('➕ Додати підручник', 'admin_add_product')],
         [Markup.button.callback('✏️ Змінити інфу підручника', 'admin_change_product')],
         [Markup.button.callback('🗑️ Видалити підручник', 'admin_delete_product')],
-        [Markup.button.callback('📢 Розсилка всім', 'admin_message_to_everyone')]
+        [Markup.button.callback('📢 Розсилка всім', 'admin_message_to_everyone')],
+        [Markup.button.callback('🔗 Додати сезонне посилання', 'admin_seasonal_link')]
     ]);
 
 // -----ОБРОБКА /start-----
-bot.start((ctx) => {
+bot.start(async (ctx) => {
     const telegramId = ctx.from.id;
     users.getOrCreate(telegramId);
 
-    const payload = ctx.startPayload;
+    const payload = ctx.payload;
     if (payload) {
-        const product = products.getByDeepLinkCode(payload);
-        if (product) {
-            return showProductCard(ctx, product);
+        const campaign = seasonalLinks.getCampaign(payload);
+        if (campaign) {
+            const wait_until = Date.now() + 10000; 
+
+            seasonalLinks.addParticipant(telegramId, payload, wait_until);
+
+            const text = campaign.message_text;
+            const photosArray = JSON.parse(campaign.photos_first_message_json);
+            const kb = Markup.inlineKeyboard([[Markup.button.callback('Перевірити', 'check_folowings')]]);
+
+            if (photosArray.length === 0) {
+                await ctx.reply(text, kb);
+            } else if (photosArray.length === 1) {
+                await ctx.replyWithPhoto(photosArray[0], { caption: text, ...kb });
+            } else {
+                const mediaGroup = photosArray.map((file_id) => ({
+                    type: 'photo',
+                    media: file_id,
+                }));
+                await ctx.replyWithMediaGroup(mediaGroup);
+                await ctx.reply(text, kb);
+            }
+            return;
         } else {
-            ctx.reply('На жаль, цей акційний товар не знайдено або термін дії посилання минув.');
+            await ctx.reply('На жаль, цей акційний товар не знайдено або термін дії посилання минув.');
+            return;
         }
     }
     
     return ctx.reply(firstMessageText, firstBtnKeyboard);
 });
 
+bot.action('check_folowings', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+
+    const targetTime = Date.now() + (7 * 24 * 60 * 60 * 1000);
+    const date = new Date(targetTime);
+
+    const formattedDate = date.toLocaleString('uk-UA', {
+        day: 'numeric',
+        month: 'long',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+
+    await ctx.reply(`Перевіряю підписки... Зачекай до ${formattedDate}`);
+});
 bot.action('ask_question', (ctx) => {
     ctx.answerCbQuery();
     return ctx.scene.enter('ASK_QUESTION_SCENE');
@@ -665,10 +856,15 @@ bot.command('admin', (ctx) => {
     return ctx.reply('Які дії?', adminKeyboard);
 });
 
+bot.action('admin_seasonal_link', (ctx) => {
+    ctx.answerCbQuery();
+    return ctx.scene.enter('SEASONAL_LINK');
+});
+
 bot.action('admin_message_to_everyone', (ctx) => {
     ctx.answerCbQuery();
     return ctx.scene.enter('MESSAGE_TO_EVERYONE');
-})
+});
 
 bot.action('admin_add_product', (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) {
@@ -879,7 +1075,7 @@ bot.action('avtentyka', async (ctx) => {
 
     const kb = Markup.inlineKeyboard(buttons);
     const text = 'Оберіть розділ / урок👇';
-    return ctx.reply(text, kb).catch(() => ctx.reply(text, kb));
+    return ctx.editMessageText(text, kb).catch(() => ctx.reply(text, kb));
 });
 
 bot.action(/^avt_prod_(\d+)$/, (ctx) => {
@@ -1097,6 +1293,30 @@ app.listen(PORT, () => {
     console.log(`Сервер для вебхуків запущено на порту ${PORT}`);
 });
 
+// ----- Сезонні посилання -----
+
+cron.schedule('* * * * *', async () => {
+    const currentTime = Date.now();
+
+    const participants = seasonalLinks.getParticipantsToNotify(currentTime);
+
+    for (const participant of participants) {
+        const currentCampaign = seasonalLinks.getCampaign(participant.campaign_code);
+
+        if (currentCampaign) {
+            try {
+                await bot.telegram.sendMessage(
+                    participant.user_id, 
+                    `${currentCampaign.reward_link}`
+                );
+            } catch (error) {
+                console.error(`Не вдалося відправити повідомлення юзеру ${participant.user_id}:`, error.message);
+            }
+        }
+
+        seasonalLinks.markAsNotified(participant.id);
+    }
+});
 
 bot.launch().then(async () => {
     const botInfo = await bot.telegram.getMe();
