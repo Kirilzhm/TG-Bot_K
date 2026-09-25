@@ -63,17 +63,16 @@ function initDB() {
             campaign_code TEXT PRIMARY KEY,
             message_text TEXT,
             photos_first_message_json TEXT DEFAULT NULL,
-            reward_link TEXT NOT NULL
+            reward_message TEXT NOT NULL,
+            wait_until INTEGER
         )
     `);
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS seasonal_participants (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            campaign_code TEXT,
-            wait_until INTEGER,
-            is_notified INTEGER DEFAULT 0
+            user_id INTEGER UNIQUE,
+            campaign_code TEXT
         )
     `)
 
@@ -156,25 +155,32 @@ const seasonalLinksHelpers = {
     getCampaign: (campaign_code) => {
         return db.prepare('SELECT * FROM seasonal_campaigns WHERE campaign_code = ?').get(campaign_code);
     },
-    addParticipant: (user_id, campaign_code, wait_until) => {
+    getCampaignNotSent: (curentTime) => {
+        return db.prepare(`SELECT * FROM seasonal_campaigns WHERE wait_until >= ?`).all(curentTime);
+    },
+    getExpiredCampaigns: (currentTime) => {
+        return db.prepare(`SELECT * FROM seasonal_campaigns WHERE wait_until <= ?`).all(currentTime);
+    },
+    getAllParticipantsOfCampaign: (campaign_code) => {
+        return db.prepare(`SELECT * FROM seasonal_participants WHERE campaign_code = ?`).all(campaign_code);
+    },
+    addParticipant: (user_id, campaign_code) => {
         return db.prepare(`
-            INSERT INTO seasonal_participants
-            (user_id, campaign_code, wait_until)
-            VALUES (?, ?, ?)
-        `).run(user_id, campaign_code, wait_until);
+            INSERT OR IGNORE INTO seasonal_participants
+            (user_id, campaign_code)
+            VALUES (?, ?)
+        `).run(user_id, campaign_code);
     },
-    getParticipantsToNotify: (curentTime) => {
-        return db.prepare(`SELECT * FROM seasonal_participants WHERE is_notified = 0 AND wait_until <= ?`).all(curentTime);
-    },
-    add: (campaign_code, text, photos, reward_link) => {
+    add: (campaign_code, text, photos, reward_message, wait_until) => {
         return db.prepare(`
             INSERT INTO seasonal_campaigns
-            (campaign_code, message_text, photos_first_message_json, reward_link)
-            VALUES (?, ?, ?, ?)
-        `).run(campaign_code, text, photos, reward_link);
+            (campaign_code, message_text, photos_first_message_json, reward_message, wait_until)
+            VALUES (?, ?, ?, ?, ?)
+        `).run(campaign_code, text, photos, reward_message, wait_until);
     },
-    markAsNotified: (participant_id) => {
-        return db.prepare(`UPDATE seasonal_participants SET is_notified = 1 WHERE id = ?  `).run(participant_id);
+    delete: (campaign_code) => {
+        db.prepare(`DELETE FROM seasonal_participants WHERE campaign_code = ?`).run(campaign_code);
+        return db.prepare(`DELETE FROM seasonal_campaigns WHERE campaign_code = ?`).run(campaign_code);
     }
 }
 

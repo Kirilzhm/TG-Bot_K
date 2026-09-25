@@ -722,23 +722,24 @@ const seasonalLink = new Scenes.WizardScene(
             return;
         }
 
-        const rewardLink = ctx.message?.text?.trim();
-        if (!rewardLink) {
+        const reward_message = ctx.message?.text?.trim();
+        if (!reward_message) {
             const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'back_to_photos')]]);
             await ctx.reply('Будь ласка, надішли повідомлення текстом:', kb);
             return;
         }
 
-        ctx.wizard.state.reward_link = rewardLink;
+        ctx.wizard.state.reward_message = reward_message;
 
         const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ В меню', 'back_to_adminMenu')]])
         await ctx.reply(`Все готово. Ось твоє посилання:\n\nhttps://t.me/KirilsTest_bot?start=${ctx.wizard.state.campaign_code}`, kb);
 
         const state = ctx.wizard.state;
         const photoJson = JSON.stringify(state.photos || []);
-
+        const wait_until = Date.now() + 1000
+        // const wait_until = Date.now() + (7 * 24 * 60 * 60 * 1000)
         seasonalLinks.add(
-            state.campaign_code, state.text, photoJson, state.reward_link
+            state.campaign_code, state.text, photoJson, state.reward_message, wait_until
         );
 
         return ctx.scene.leave();
@@ -787,13 +788,9 @@ bot.start(async (ctx) => {
     if (payload) {
         const campaign = seasonalLinks.getCampaign(payload);
         if (campaign) {
-            const wait_until = Date.now() + 10000; 
-
-            seasonalLinks.addParticipant(telegramId, payload, wait_until);
-
             const text = campaign.message_text;
             const photosArray = JSON.parse(campaign.photos_first_message_json);
-            const kb = Markup.inlineKeyboard([[Markup.button.callback('Перевірити', 'check_folowings')]]);
+            const kb = Markup.inlineKeyboard([[Markup.button.callback('Готово', `check_folowings_${payload}`)]]);
 
             if (photosArray.length === 0) {
                 await ctx.reply(text, kb);
@@ -817,17 +814,21 @@ bot.start(async (ctx) => {
     return ctx.reply(firstMessageText, firstBtnKeyboard);
 });
 
-bot.action('check_folowings', async (ctx) => {
+bot.action(/^check_folowings_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
+    const payload = ctx.match[1];
+    const telegramId = ctx.from.id;
+    seasonalLinks.addParticipant(telegramId, payload);
 
-    const targetTime = Date.now() + (7 * 24 * 60 * 60 * 1000);
-    const date = new Date(targetTime);
-
+    const campaign = seasonalLinks.getCampaign(payload)
+    if (!campaign) {
+        return ctx.reply('Термін дії цієї акції минув або її не існує.');
+    }
+    seasonalLinks.addParticipant(telegramId, payload);
+    const date = new Date(campaign.wait_until);
     const formattedDate = date.toLocaleString('uk-UA', {
         day: 'numeric',
-        month: 'long',
-        hour: '2-digit',
-        minute: '2-digit'
+        month: 'long'
     });
 
     await ctx.reply(`Перевіряю підписки... Зачекай до ${formattedDate}`);
@@ -1297,24 +1298,20 @@ app.listen(PORT, () => {
 
 cron.schedule('* * * * *', async () => {
     const currentTime = Date.now();
-
-    const participants = seasonalLinks.getParticipantsToNotify(currentTime);
-
-    for (const participant of participants) {
-        const currentCampaign = seasonalLinks.getCampaign(participant.campaign_code);
-
-        if (currentCampaign) {
+    const compaigns = seasonalLinks.getExpiredCampaigns(currentTime);
+    for (const campaign of compaigns) {
+        const participants = seasonalLinks.getAllParticipantsOfCampaign(campaign.campaign_code);
+        for(const participant of participants) {
             try {
                 await bot.telegram.sendMessage(
-                    participant.user_id, 
-                    `${currentCampaign.reward_link}`
-                );
-            } catch (error) {
+                    participant.user_id,
+                    campaign.reward_message
+                )
+            } catch (err) {
                 console.error(`Не вдалося відправити повідомлення юзеру ${participant.user_id}:`, error.message);
             }
         }
-
-        seasonalLinks.markAsNotified(participant.id);
+        seasonalLinks.delete(campaign.campaign_code);
     }
 });
 
